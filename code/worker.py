@@ -1,7 +1,7 @@
 import torch
 from collections import defaultdict
 from copy import deepcopy
-from typing import Optional, Union, Callable, Any, Tuple
+from typing import Optional, Union, Callable, Tuple
 
 from utils.random_generator import RandomNumber
 from compressors import Identity, Compressor
@@ -45,6 +45,7 @@ class TorchWorker(object):
         self.running = {}
         self.metrics = {}
         self.state = defaultdict(dict)
+        self.last_update_norm = torch.inf  # for clipping
 
     def add_metric(
             self,
@@ -127,6 +128,9 @@ class TorchWorker(object):
                     self.compression(param_state["saved_grad"].data.view(-1)))
         return torch.cat(layer_gradients)
 
+    def set_update_norm(self, update_norm: float) -> None:
+        self.last_update_norm = update_norm
+
 
 class MomentumWorker(TorchWorker):
     def __init__(self, momentum, *args, **kwargs):
@@ -191,6 +195,8 @@ class DianaWorker(TorchWorker):
 
 class MarinaWorker(TorchWorker):
     def __init__(self, *args, **kwargs):
+        self.clip_update = kwargs.pop("clip_update", False)
+        self.clip_mult = kwargs.pop("clip_mult", 2.)
         super().__init__(*args, **kwargs)
 
     def _compute_full_grad(self) -> None:
@@ -206,11 +212,10 @@ class MarinaWorker(TorchWorker):
         loss /= n_points
         loss.backward()
 
-
     def _compute_previous_grad(self) -> None:
         self.model_snap.train()
         self.optimizer_snap.zero_grad()
-        data, target  = self.running["data"], self.running["target"]
+        data, target = self.running["data"], self.running["target"]
         output = self.model_snap(data)
         loss = self.loss_func(output, target, self.model_snap)
         loss.backward()
@@ -221,7 +226,8 @@ class MarinaWorker(TorchWorker):
         else:
             self._compute_previous_grad()
 
-        for group, group_snap in zip(self.optimizer.param_groups, self.optimizer_snap.param_groups):
+        for group, group_snap in zip(self.optimizer.param_groups,
+                                     self.optimizer_snap.param_groups):
             for p, p_snap in zip(group["params"], group_snap["params"]):
                 if p.grad is None:
                     continue
@@ -231,8 +237,16 @@ class MarinaWorker(TorchWorker):
                     param_state["marina_buffer"] = p.grad.data.detach().clone()
                 else:
                     diff = self.compression(
-                        p.grad.data.detach().clone() - p_snap.grad.data.detach().clone()
+                        p.grad.data.detach().clone() -
+                        p_snap.grad.data.detach().clone()
                     )
+
+                    # clipping
+                    clip_const = self.clip_mult * self.last_update_norm
+                    if self.clip_update:
+                        if torch.norm(diff) > clip_const:
+                            diff = diff / torch.norm(diff) * clip_const
+
                     param_state["marina_buffer"].add_(diff)
 
     def _get_saved_grad(self) -> torch.Tensor:
@@ -256,15 +270,23 @@ class ByzantineWorker(TorchWorker):
     def get_gradient(self):
         return self._gradient
 
-    def omniscient_callback(self):
+    def omniscient_callback(self, subset: Optional[list] = None):
         # Loop over good workers and accumulate their gradients
+        # only through the ones that participated in current round
+        if subset is not None:
+            subset_workers = [self.simulator.workers[i] for i in subset]
+        else:
+            subset_workers = self.simulator.workers
+
         gradients = []
-        for w in self.simulator.workers:
+        for w in subset_workers:
             if not isinstance(w, ByzantineWorker):
                 gradients.append(w.get_gradient())
 
-        stacked_gradients = torch.stack(gradients, 1)
-        self._gradient = torch.mean(stacked_gradients, 1)
+        # if no good workers participated, use the last gradient
+        if len(gradients) > 0:
+            stacked_gradients = torch.stack(gradients, 1)
+            self._gradient = torch.mean(stacked_gradients, 1)
 
     def compute_gradient(self) -> Tuple[float, int]:
         # Use self.simulator to get all other workers

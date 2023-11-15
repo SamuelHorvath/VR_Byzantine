@@ -73,6 +73,8 @@ def initialize_worker(
                 device=device,
                 optimizer=optimizer,
                 optimizer_snap=optimizer_snap,
+                clip_update=args.clip_update,
+                clip_mult=args.clip_mult,
                 **kwargs,
             )
         elif args.model == 'diana':
@@ -306,7 +308,9 @@ def main(args):
             full_metrics, metric_to_dict(train_metric, metrics, 0, 'train'))
         for epoch in range(1, args.epochs + 1):
             RandomNumber.full_grad = True
-            trainer.train(epoch)
+            trainer.train(
+                epoch, args.partial_participation,
+                args.partial_participation_ratio)
             if epoch % args.eval_every == 0 or epoch == args.epochs:
                 train_metric = train_evaluator.evaluate(epoch)
                 extend_metrics_dict(

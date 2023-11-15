@@ -47,10 +47,11 @@ def bucketing_wrapper(args, aggregator, s):
     print("Using bucketing wrapper.")
 
     def aggr(inputs):
-        indices = list(range(len(inputs)))
+        n = len(inputs)
+        indices = list(range(n))
         np.random.shuffle(indices)
 
-        T = int(np.ceil(args.n / s))
+        T = int(np.ceil(n / s))
 
         reshuffled_inputs = []
         for t in range(T):

@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from typing import Union, Callable, Any
+from typing import Union, Callable, Any, List
 
 from utils.logger import Logger
 from utils.utils import init_metrics_meter
@@ -67,36 +67,57 @@ class ParallelTrainer(DistributedSimulatorBase):
         self.random_states = {}
         super().__init__(metrics, use_cuda, debug)
 
-    def aggregation_and_update(self):
-        # If there are Byzantine workers, ask them to craft attacks based on the updated models.
+    def aggregation_and_update(self, subset: List[int] = None):
+        # If there are Byzantine workers,
+        # ask them to craft attacks based on the updated models.
         for omniscient_attacker_callback in self.omniscient_callbacks:
-            omniscient_attacker_callback()
+            omniscient_attacker_callback(subset=subset)
 
-        gradients = self.parallel_get(lambda w: w.get_gradient())
+        # print("subset", subset)
+        gradients = self.parallel_get(
+            lambda w: w.get_gradient(), subset=subset)
 
-        # print(len(gradients))
-        # print(torch.std(torch.stack(gradients, dim=0), dim=0))
+        # print('Gradients len:', len(gradients))
+        # print('Gradients stat:', torch.std(torch.stack(gradients, dim=0), dim=0))
 
         aggregated = self.aggregator(gradients)
+        # each client know the update norm, i.e.,
+        # x_{k+1} - x_k = - \eta aggregated
+        update_norm = torch.norm(aggregated) * \
+            self.server.optimizer.param_groups[0]['lr']
+        # set this norm on all workers
+        self.parallel_call(lambda w: w.set_update_norm(update_norm))
 
         # Assume that the model and optimizers are shared among workers.
         self.server.set_gradient(aggregated)
         self.server.apply_gradient()
 
-    def train(self, epoch):
+    def train(self, epoch, partial_participation=False,
+              partial_participation_ratio=0.2):
         self.debug_logger.info(f"Train epoch {epoch}")
         self.parallel_call(lambda worker: worker.train_epoch_start())
 
         metrics_meter = init_metrics_meter(self.metrics, epoch)
         for batch_idx in range(self.max_batches_per_epoch):
             try:
-                results = self.parallel_get(lambda w: w.compute_gradient())
-                self.aggregation_and_update()
+                # partial participation
+                if partial_participation and not RandomNumber.full_grad:
+                    subset_int = np.random.choice(
+                        len(self.workers),
+                        int(len(self.workers) * partial_participation_ratio),
+                        replace=False,
+                    )
+                else:
+                    subset_int = None
+
+                results = self.parallel_get(
+                    lambda w: w.compute_gradient(), subset=subset_int)
+                self.aggregation_and_update(subset=subset_int)
 
                 for res in results:
                     update_metrics(metrics_meter, 'loss', res['loss'], res['batch_size'])
                     for key in self.metrics:
-                        update_metrics(metrics_meter, key, res["metrics"][key] , res['batch_size'])
+                        update_metrics(metrics_meter, key, res["metrics"][key], res['batch_size'])
                 if batch_idx % self.log_interval == 0:
                     self.log_train(metrics_meter, batch_idx, epoch)
                 RandomNumber.sample()
@@ -128,15 +149,27 @@ class ParallelTrainer(DistributedSimulatorBase):
         torch.set_rng_state(self.random_states["torch"])
         np.random.set_state(self.random_states["numpy"])
 
-    def parallel_call(self, f: Callable[[TorchWorker], None]) -> None:
-        for w in self.workers:
+    def parallel_call(self, f: Callable[[TorchWorker], None],
+                      subset: List[int] = None) -> None:
+        if subset is None:
+            subset_workers = self.workers
+        else:
+            subset_workers = [self.workers[i] for i in subset]
+
+        for w in subset_workers:
             self.cache_random_state()
             f(w)
             self.restore_random_state()
 
-    def parallel_get(self, f: Callable[[TorchWorker], Any]) -> list:
+    def parallel_get(self, f: Callable[[TorchWorker], Any],
+                     subset: List[int] = None) -> list:
+        if subset is None:
+            subset_workers = self.workers
+        else:
+            subset_workers = [self.workers[i] for i in subset]
+
         results = []
-        for w in self.workers:
+        for w in subset_workers:
             self.cache_random_state()
             results.append(f(w))
             self.restore_random_state()

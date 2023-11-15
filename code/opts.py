@@ -25,6 +25,14 @@ def get_args(args):
     parser.add_argument("--test-batch-size", default=128, type=int, help="Test batch size")
     parser.add_argument("--full-dataset", action="store_true", default=False)
 
+    # Partial participation
+    parser.add_argument("--partial-participation", action="store_true", default=False)
+    parser.add_argument("--partial-participation-ratio", type=float, default=0.2)
+
+    # Clipping
+    parser.add_argument("--clip-update", action="store_true", default=False)
+    parser.add_argument("--clip-mult", type=float, default=2.)
+
     parser.add_argument("--attack", type=str, default="NA", help="Type of attacks.")
     parser.add_argument("--agg", type=str, default="avg", help="")
     parser.add_argument("--model", type=str, default="grad", help="")
