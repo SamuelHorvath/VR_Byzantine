@@ -71,7 +71,7 @@ def get_aggregator(args):
     return bucketing_wrapper(args, aggr, args.bucketing)
 
 
-def get_sampler_callback(args, rank):
+def get_sampler_callback(args, rank, shuffle=True):
     """
     Get sampler based on the rank of a worker.
     The first `n-f` workers are good, and the rest are Byzantine
@@ -82,7 +82,7 @@ def get_sampler_callback(args, rank):
         return lambda x: DistributedSampler(
             num_replicas=n_good,
             rank=rank % n_good,
-            shuffle=True,
+            shuffle=shuffle,
             dataset=x,
             full_dataset=args.full_dataset,
             shuffle_iter=True,
@@ -92,7 +92,7 @@ def get_sampler_callback(args, rank):
     return lambda x: DistributedSampler(
         num_replicas=n_good,
         rank=rank,
-        shuffle=True,
+        shuffle=shuffle,
         dataset=x,
         full_dataset=args.full_dataset,
         shuffle_iter=True,

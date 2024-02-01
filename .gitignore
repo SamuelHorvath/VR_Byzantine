@@ -135,3 +135,6 @@ outputs/
 # data
 data/
 
+# plots
+plots/
+

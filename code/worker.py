@@ -24,9 +24,10 @@ class TorchWorker(object):
             compression: Compressor,
     ):
         self.data_loader = data_loader
-        self.scalar = len(data_loader.dataset) / (
-                data_loader.sampler.num_replicas * len(data_loader.sampler))
-        # self.scalar = 1.
+        # BUG: we would need scalar for non-uniform data split
+        # self.scalar = len(data_loader.dataset) / (
+        #         data_loader.sampler.num_replicas * len(data_loader.sampler))
+        self.scalar = 1.
         self.model = model
         self.model_snap = model_snap
         self.optimizer = optimizer
@@ -45,7 +46,7 @@ class TorchWorker(object):
         self.running = {}
         self.metrics = {}
         self.state = defaultdict(dict)
-        self.last_update_norm = torch.inf  # for clipping
+        self.global_gradient = None
 
     def add_metric(
             self,
@@ -128,8 +129,8 @@ class TorchWorker(object):
                     self.compression(param_state["saved_grad"].data.view(-1)))
         return torch.cat(layer_gradients)
 
-    def set_update_norm(self, update_norm: float) -> None:
-        self.last_update_norm = update_norm
+    def set_global_gradient(self, global_gradient: torch.Tensor) -> None:
+        self.global_gradient = global_gradient
 
 
 class MomentumWorker(TorchWorker):
@@ -195,8 +196,8 @@ class DianaWorker(TorchWorker):
 
 class MarinaWorker(TorchWorker):
     def __init__(self, *args, **kwargs):
-        self.clip_update = kwargs.pop("clip_update", False)
-        self.clip_mult = kwargs.pop("clip_mult", 2.)
+        # self.clip_update = kwargs.pop("clip_update", False)
+        # self.clip_mult = kwargs.pop("clip_mult", 2.)
         super().__init__(*args, **kwargs)
 
     def _compute_full_grad(self) -> None:
@@ -224,6 +225,9 @@ class MarinaWorker(TorchWorker):
         if RandomNumber.full_grad:
             self._compute_full_grad()
         else:
+            # set current gradient to global gradient
+            # and compute the gradient in prior point
+            self._set_global_gradient_to_buffer()
             self._compute_previous_grad()
 
         for group, group_snap in zip(self.optimizer.param_groups,
@@ -241,11 +245,11 @@ class MarinaWorker(TorchWorker):
                         p_snap.grad.data.detach().clone()
                     )
 
-                    # clipping
-                    clip_const = self.clip_mult * self.last_update_norm
-                    if self.clip_update:
-                        if torch.norm(diff) > clip_const:
-                            diff = diff / torch.norm(diff) * clip_const
+                    # # clipping
+                    # clip_const = self.clip_mult * self.last_update_norm
+                    # if self.clip_update:
+                    #     if torch.norm(diff) > clip_const:
+                    #         diff = diff / torch.norm(diff) * clip_const
 
                     param_state["marina_buffer"].add_(diff)
 
@@ -255,7 +259,29 @@ class MarinaWorker(TorchWorker):
             for p in group["params"]:
                 param_state = self.state[p]
                 layer_gradients.append(param_state["marina_buffer"].data.view(-1))
-        return torch.cat(layer_gradients)
+        grad = torch.cat(layer_gradients)
+        # print("norm of marina gradient: ", torch.norm(grad))
+        return grad
+
+    def _set_global_gradient_to_buffer(self) -> None:
+        gradient = self.global_gradient
+        # print("shape of global gradient: ", gradient.shape)
+        # print("norm of global gradient: ", torch.norm(gradient))
+        # gradient = self._get_saved_grad()
+        # print("shape of local gradient: ", gradient.shape)
+        # print("norm of local gradient: ", torch.norm(gradient))
+        if gradient is None:
+            raise ValueError("Global gradient is not set.")
+        beg = 0
+        for group in self.optimizer.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                param_state = self.state[p]
+                end = beg + len(p.grad.view(-1))
+                x = gradient[beg:end].reshape_as(p.grad.data)
+                param_state["marina_buffer"] = x.clone().detach()
+                beg = end
 
     def __str__(self) -> str:
         return "MarinaWorker"

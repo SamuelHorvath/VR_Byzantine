@@ -50,11 +50,13 @@ class ParallelTrainer(DistributedSimulatorBase):
     ):
         """
         Args:
-            aggregator (callable): A callable which takes a list of tensors and returns
-                an aggregated tensor.
-            max_batches_per_epoch (int): Set the maximum number of batches in an epoch.
+            aggregator (callable): A callable which takes a list of tensors
+            and returns an aggregated tensor.
+            max_batches_per_epoch (int): Set the maximum number of batches
+              in an epoch.
                 Usually used for debugging.
-            log_interval (int): Control the frequency of logging training batches
+            log_interval (int): Control the frequency of logging
+            training batches
             metrics (dict): dict of metric names and their functions
             use_cuda (bool): Use cuda or not
             debug (bool):
@@ -66,34 +68,71 @@ class ParallelTrainer(DistributedSimulatorBase):
         self.omniscient_callbacks = []
         self.random_states = {}
         super().__init__(metrics, use_cuda, debug)
+        self.subset_int = None  # for partial participation
 
-    def aggregation_and_update(self, subset: List[int] = None):
+    def aggregation_and_update(self,
+                               clip_update: bool = False,
+                               clip_mult: float = 1.0):
         # If there are Byzantine workers,
         # ask them to craft attacks based on the updated models.
+        # Attackers know all the clients
         for omniscient_attacker_callback in self.omniscient_callbacks:
-            omniscient_attacker_callback(subset=subset)
+            omniscient_attacker_callback()
 
         # print("subset", subset)
         gradients = self.parallel_get(
-            lambda w: w.get_gradient(), subset=subset)
+            lambda w: w.get_gradient(), subset=self.subset_int)
+
+        # for i in range(len(gradients)):
+        #     print(f"Gradient {i} norm {torch.norm(gradients[i])}")
+        #     break
 
         # print('Gradients len:', len(gradients))
-        # print('Gradients stat:', torch.std(torch.stack(gradients, dim=0), dim=0))
+        # print('Gradients stat:',
+        #     torch.std(torch.stack(gradients, dim=0), dim=0))
+        if clip_update:
+            if self.server.last_gradient is None:
+                raise ValueError("No last gradient to clip")
 
-        aggregated = self.aggregator(gradients)
-        # each client know the update norm, i.e.,
-        # x_{k+1} - x_k = - \eta aggregated
-        update_norm = torch.norm(aggregated) * \
-            self.server.optimizer.param_groups[0]['lr']
-        # set this norm on all workers
-        self.parallel_call(lambda w: w.set_update_norm(update_norm))
+            # compute the threshold: clip_mult * ||x_k - x_{k-1}||_2
+            # lr = self.server.optimizer.param_groups[0]['lr']
+            threshold = clip_mult * torch.norm(self.server.last_gradient)
+            # print(f"Threshold {threshold:.6f}")
+
+            def clip_update(gradient):
+                norm = torch.norm(gradient)
+                if norm > threshold:
+                    # print('Clipping gradient')
+                    new_gradient = gradient * (threshold / norm)
+                    # assert torch.allclose(
+                    #     torch.norm(new_gradient), threshold)
+                    return new_gradient
+
+                return gradient
+
+            # shift and clip client gradients
+            shifted_gradients = [
+                clip_update(gradient - self.server.last_gradient)
+                for gradient in gradients]
+            # shift back and aggregate
+            aggregated = self.server.last_gradient + self.aggregator(
+                shifted_gradients)
+            # aggregated_no_clip = self.aggregator(gradients)
+            # print(torch.norm(aggregated - aggregated_no_clip))
+        else:
+            aggregated = self.aggregator(gradients)
+        # print(f"Global gradient norm {torch.norm(aggregated)}")
+
+        # each client know the "global gradient", i.e., aggregated
+        self.parallel_call(lambda w: w.set_global_gradient(aggregated))
 
         # Assume that the model and optimizers are shared among workers.
         self.server.set_gradient(aggregated)
         self.server.apply_gradient()
 
     def train(self, epoch, partial_participation=False,
-              partial_participation_ratio=0.2):
+              partial_participation_ratio=0.2,
+              clip_update=False, clip_mult=1.0):
         self.debug_logger.info(f"Train epoch {epoch}")
         self.parallel_call(lambda worker: worker.train_epoch_start())
 
@@ -102,22 +141,32 @@ class ParallelTrainer(DistributedSimulatorBase):
             try:
                 # partial participation
                 if partial_participation and not RandomNumber.full_grad:
-                    subset_int = np.random.choice(
+                    self.subset_int = np.random.choice(
                         len(self.workers),
                         int(len(self.workers) * partial_participation_ratio),
                         replace=False,
                     )
                 else:
-                    subset_int = None
+                    self.subset_int = None
 
+                # compute gradient for all the clients,
+                # to be used by omniscient attackers
                 results = self.parallel_get(
-                    lambda w: w.compute_gradient(), subset=subset_int)
-                self.aggregation_and_update(subset=subset_int)
+                    lambda w: w.compute_gradient(), subset=None)
+                # aggregate the gradients of clients that participate
+                self.aggregation_and_update(
+                    # do not clip when full_grad,
+                    # i.e., full participation, is True
+                    clip_update=clip_update and not RandomNumber.full_grad,
+                    clip_mult=clip_mult)
 
                 for res in results:
-                    update_metrics(metrics_meter, 'loss', res['loss'], res['batch_size'])
+                    update_metrics(
+                        metrics_meter, 'loss', res['loss'], res['batch_size'])
                     for key in self.metrics:
-                        update_metrics(metrics_meter, key, res["metrics"][key], res['batch_size'])
+                        update_metrics(
+                            metrics_meter, key, res["metrics"][key],
+                            res['batch_size'])
                 if batch_idx % self.log_interval == 0:
                     self.log_train(metrics_meter, batch_idx, epoch)
                 RandomNumber.sample()

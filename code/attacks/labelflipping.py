@@ -77,3 +77,4 @@ class LableFlippingWorker(ByzantineWorker):
 
     def __str__(self) -> str:
         return "LableFlippingWorker"
+    

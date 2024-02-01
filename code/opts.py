@@ -24,6 +24,8 @@ def get_args(args):
     parser.add_argument("-b", "--batch-size", default=32, type=int, help="Batch size")
     parser.add_argument("--test-batch-size", default=128, type=int, help="Test batch size")
     parser.add_argument("--full-dataset", action="store_true", default=False)
+    parser.add_argument("--shuffle", action="store_true", default=False, 
+                        help="Shuffle the dataset (IID vs NON-IID).")
 
     # Partial participation
     parser.add_argument("--partial-participation", action="store_true", default=False)

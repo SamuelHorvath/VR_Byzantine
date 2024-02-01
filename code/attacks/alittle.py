@@ -44,3 +44,4 @@ class ALittleIsEnoughAttack(ByzantineWorker):
 
     def apply_gradient(self) -> None:
         raise NotImplementedError
+    

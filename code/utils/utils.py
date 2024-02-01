@@ -49,6 +49,7 @@ def accuracy(output, target, topk=(1,)):
 def top1_accuracy(output, target):
     return accuracy(output, target, topk=(1,))[0].item()
 
+
 @torch.no_grad()
 def grad_norm(output, target, model):
     flatten_grad = torch.cat([p.grad.view(-1) for p in model.parameters()
@@ -117,6 +118,10 @@ def create_model_dir(args, lr=True):
     run_id = f'id={args.run_id}'
     attack = f'attack={args.attack}'
     agg = f'agg={args.agg}_{args.bucketing}'
+    if args.clip_update:
+        agg += f'_clip_{str(args.clip_mult)}'
+    if args.partial_participation:
+        agg += f'_pp_{str(args.partial_participation_ratio)}'
     model = f'model={args.model}'
     compression = f'compression={args.compression}'
 

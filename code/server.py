@@ -4,11 +4,13 @@ import torch
 class TorchServer(object):
     def __init__(self, optimizer: torch.optim.Optimizer):
         self.optimizer = optimizer
+        self.last_gradient = None
 
     def apply_gradient(self) -> None:
         self.optimizer.step()
 
     def set_gradient(self, gradient: torch.Tensor) -> None:
+        self.last_gradient = gradient
         beg = 0
         for group in self.optimizer.param_groups:
             for p in group["params"]:

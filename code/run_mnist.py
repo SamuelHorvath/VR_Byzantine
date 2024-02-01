@@ -9,11 +9,10 @@ from torch import nn
 from opts import get_args
 
 # Utility functions
-from data_funcs.libsvm import LibSVM
-from tasks.libsvm import LogisticRegression, libsvm
 from tasks.loss import Loss
+from tasks.mnist import Net, mnist
 from utils.utils import create_model_dir, init_metrics_meter, \
-    extend_metrics_dict, metric_to_dict  # top1_accuracy, grad_norm
+    extend_metrics_dict, metric_to_dict, top1_accuracy  # , grad_norm
 from utils.logger import Logger
 from utils.random_generator import RandomNumber
 from compressors import get_compression
@@ -32,13 +31,12 @@ from utils.byz_funcs import get_sampler_callback, get_aggregator, \
     get_test_sampler_callback
 
 # Fixed HPs
-# BATCH_SIZE = 32
+# BATCH_SIZE = 128
 # TEST_BATCH_SIZE = 1024
 
-DATASET = 'a9a'
+DATASET = 'MNIST'
 EXTRA_ID = ''
-N_FEATURES = 123
-PENALTY = 1e-2
+PENALTY = 0.
 
 
 def initialize_worker(
@@ -55,16 +53,11 @@ def initialize_worker(
 ):
     compression = get_compression(args.compression)
 
-    train_loader = libsvm(
-        data_dir=args.data_path,
-        name=DATASET,
-        download=True,
-        batch_size=args.batch_size,
-        sampler_callback=get_sampler_callback(args, worker_rank),
-        dataset_cls=LibSVM,
-        drop_last=False,
-        **kwargs,
-    )
+    train_loader = mnist(
+        args.data_path, train=True,
+        download=True, batch_size=args.batch_size,
+        sampler_callback=get_sampler_callback(
+            args, worker_rank, shuffle=args.shuffle))
 
     if worker_rank < args.n - args.f:
         if args.model == 'marina':
@@ -230,6 +223,11 @@ def main(args):
     if args.full_dataset:
         args.run_id += '_full'
 
+    if args.shuffle:
+        args.run_id += '_iid'
+    else:
+        args.run_id += '_non_iid'
+
     if args.use_cuda and not torch.cuda.is_available():
         print("=> There is no cuda device!!!!")
         device = "cpu"
@@ -242,7 +240,7 @@ def main(args):
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
-    model = LogisticRegression(N_FEATURES).to(device)
+    model = Net().to(device)
     model_snap_s = [deepcopy(model) for _ in range(args.n)]
 
     # Each optimizer contains a separate `state` to store
@@ -253,10 +251,12 @@ def main(args):
                                        lr=args.lr) for i in range(args.n)]
     server_opt = torch.optim.SGD(model.parameters(), lr=args.lr)
 
-    Loss(nn.BCEWithLogitsLoss(), True, PENALTY)
+    Loss(nn.CrossEntropyLoss(), False)
     loss_func = Loss.compute_loss
 
-    metrics = {}
+    metrics = {
+        'top1': top1_accuracy,
+    }
 
     if args.batch_size > args.test_batch_size:
         args.test_batch_size = args.batch_size
@@ -273,9 +273,9 @@ def main(args):
 
     )
 
-    train_loader = libsvm(
+    train_loader = mnist(
         data_dir=args.data_path,
-        name=DATASET,
+        train=True,
         download=True,
         batch_size=args.test_batch_size,
         shuffle=False,
@@ -292,6 +292,27 @@ def main(args):
         use_cuda=args.use_cuda,
         debug=False,
         log_identifier_type='train',
+    )
+
+    test_loader = mnist(
+        data_dir=args.data_path,
+        train=False,
+        download=True,
+        batch_size=args.test_batch_size,
+        shuffle=False,
+        sampler_callback=get_test_sampler_callback(args),
+        **kwargs,
+    )
+
+    test_evaluator = DistributedEvaluator(
+        model=model,
+        data_loader=test_loader,
+        loss_func=loss_func,
+        device=device,
+        metrics=metrics,
+        use_cuda=args.use_cuda,
+        debug=False,
+        log_identifier_type='test',
     )
 
     if args.attack == "NA":
@@ -329,8 +350,16 @@ def main(args):
         train_metric = train_evaluator.evaluate(0)
         extend_metrics_dict(
             full_metrics, metric_to_dict(train_metric, metrics, 0, 'train'))
+        test_metric = test_evaluator.evaluate(0)
+        extend_metrics_dict(
+            full_metrics, metric_to_dict(test_metric, metrics, 0, 'test'))
         for epoch in range(1, args.epochs + 1):
-            RandomNumber.full_grad = True
+            # all clients never participates
+            # we need to have first run good to initialize norm
+            if epoch == 1:
+                RandomNumber.full_grad = True
+            else:
+                RandomNumber.full_grad = False
             trainer.train(
                 epoch, args.partial_participation,
                 args.partial_participation_ratio,
@@ -340,6 +369,10 @@ def main(args):
                 extend_metrics_dict(
                     full_metrics, metric_to_dict(
                         train_metric, metrics, epoch, 'train'))
+                test_metric = test_evaluator.evaluate(epoch)
+                extend_metrics_dict(
+                    full_metrics, metric_to_dict(
+                        test_metric, metrics, epoch, 'test'))
             trainer.parallel_call(
                 lambda w: w.data_loader.sampler.set_epoch(epoch))
         #  store the run
