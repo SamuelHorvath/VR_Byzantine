@@ -213,6 +213,7 @@ def initialize_worker(
             device=device,
             optimizer=optimizer,
             optimizer_snap=optimizer_snap,
+            multiplier='lr',
             **kwargs,
         )
         attacker.configure(trainer)

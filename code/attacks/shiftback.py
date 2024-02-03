@@ -4,10 +4,11 @@ from worker import ByzantineWorker
 
 
 class ShiftBackAttacker(ByzantineWorker):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, multiplier, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._gradient = None
         self.original_model = self._save_current_model()
+        self.mult = multiplier
 
     def get_gradient(self):
         return self._gradient
@@ -37,10 +38,14 @@ class ShiftBackAttacker(ByzantineWorker):
 
         if byzantine_majority:
             # shift back to the original model
-            # print("Shift back to the original model")
-            # lr = self.optimizer.param_groups[0]["lr"]
+            print("Shift back to the original model")
+            lr = self.optimizer.param_groups[0]["lr"]
+            if self.mult == 'lr':
+                mult = lr
+            else:
+                mult = self.mult
             self._gradient = \
-                (self._save_current_model() - self.original_model)
+                mult / lr * (self._save_current_model() - self.original_model)
         else:
             # be a good worker, average the gradients
             good_grads = []

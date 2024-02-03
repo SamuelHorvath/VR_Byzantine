@@ -132,7 +132,7 @@ def initialize_worker(
 
     if args.attack == "LF":
         attacker = LableFlippingWorker(
-            revertible_label_transformer=lambda y: 1 - y,
+            revertible_label_transformer=lambda y: 9 - y,
             compression=compression,
             data_loader=train_loader,
             model=model,
@@ -206,6 +206,7 @@ def initialize_worker(
             device=device,
             optimizer=optimizer,
             optimizer_snap=optimizer_snap,
+            multiplier=2.,
             **kwargs,
         )
         attacker.configure(trainer)
