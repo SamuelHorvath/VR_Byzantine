@@ -1,0 +1,10 @@
+#!/bin/bash
+
+python run_cifar.py --model mom_sgd --agg cm --bucketing 2 --attack ALIE --lr 0.01 --seed 123 -b 128 --test-batch-size 1024 -e 30 -n 20 -f 5 --use-cuda --eval-every 1 --compression none --partial-participation --partial-participation-ratio 0.2 --clip-update --clip-mult 0.1
+python run_cifar.py --model mom_sgd --agg cm --bucketing 2 --attack ALIE --lr 0.01 --seed 123 -b 128 --test-batch-size 1024 -e 30 -n 20 -f 5 --use-cuda --eval-every 1 --compression none --partial-participation --partial-participation-ratio 0.2 --clip-update --clip-mult 1.0
+python run_cifar.py --model mom_sgd --agg cm --bucketing 2 --attack ALIE --lr 0.01 --seed 123 -b 128 --test-batch-size 1024 -e 30 -n 20 -f 5 --use-cuda --eval-every 1 --compression none --partial-participation --partial-participation-ratio 0.2 --clip-update --clip-mult 10.0
+python run_cifar.py --model mom_sgd --agg cm --bucketing 2 --attack ALIE --lr 0.01 --seed 123 -b 128 --test-batch-size 1024 -e 30 -n 20 -f 5 --use-cuda --eval-every 1 --compression none --partial-participation --partial-participation-ratio 0.2
+python run_cifar.py --model mom_sgd --agg cm --bucketing 2 --attack ALIE --lr 0.001 --seed 123 -b 128 --test-batch-size 1024 -e 30 -n 20 -f 5 --use-cuda --eval-every 1 --compression none --partial-participation --partial-participation-ratio 0.2 --clip-update --clip-mult 0.1
+python run_cifar.py --model mom_sgd --agg cm --bucketing 2 --attack ALIE --lr 0.001 --seed 123 -b 128 --test-batch-size 1024 -e 30 -n 20 -f 5 --use-cuda --eval-every 1 --compression none --partial-participation --partial-participation-ratio 0.2 --clip-update --clip-mult 1.0
+python run_cifar.py --model mom_sgd --agg cm --bucketing 2 --attack ALIE --lr 0.001 --seed 123 -b 128 --test-batch-size 1024 -e 30 -n 20 -f 5 --use-cuda --eval-every 1 --compression none --partial-participation --partial-participation-ratio 0.2 --clip-update --clip-mult 10.0
+python run_cifar.py --model mom_sgd --agg cm --bucketing 2 --attack ALIE --lr 0.001 --seed 123 -b 128 --test-batch-size 1024 -e 30 -n 20 -f 5 --use-cuda --eval-every 1 --compression none --partial-participation --partial-participation-ratio 0.2
